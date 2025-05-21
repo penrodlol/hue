@@ -1,26 +1,24 @@
-import { getLights } from '@/libs/api';
-import { atom, useAtom } from 'jotai';
-import { Text, View } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-
-const store = atom(async () => getLights());
+import { useStore } from '@/libs/store';
+import { Button, Text, View } from 'react-native';
 
 export default function HomePage() {
-  const [lights] = useAtom(store);
+  const store = useStore();
 
   return (
-    <SafeAreaProvider>
-      <SafeAreaView style={{ flex: 1 }}>
-        <View
-          style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}
-        >
-          {lights.map((light, index) => (
-            <View key={index} style={{ padding: 10 }}>
-              <Text>{light.name}</Text>
-            </View>
-          ))}
+    <View>
+      <View style={{ display: 'flex', gap: 10, marginBlockEnd: 50 }}>
+        <Button title="Refetch" onPress={() => store.refetchAllLights()} />
+        <Button title="Toggle" onPress={() => store.toggleAllLights.mutateAsync(store.lights.data ?? [])} />
+      </View>
+      {store.lights.data?.map((light) => (
+        <View key={light.id}>
+          <Text>{light.name}</Text>
+          <Button
+            title={light.state.on ? 'Turn Off' : 'Turn On'}
+            onPress={() => store.toggleLight.mutateAsync(light)}
+          />
         </View>
-      </SafeAreaView>
-    </SafeAreaProvider>
+      ))}
+    </View>
   );
 }

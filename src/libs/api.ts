@@ -1,9 +1,5 @@
 import { z } from 'zod';
 
-export type APISuccess<T> = { data: T; success: true; error?: never };
-export type APIFailure<E> = { data?: never; success: false; error: E };
-export type APIResponse<T, E = Error> = Promise<APISuccess<T> | APIFailure<E>>;
-
 export type Light = z.infer<typeof lightSchema>;
 export type LightType = z.infer<typeof lightSchema.shape.type>;
 export type LightState = z.infer<typeof lightSchema.shape.state>;
@@ -17,17 +13,14 @@ export const HUE_IP = z.string().ip().parse(process.env.EXPO_PUBLIC_HUE_IP);
 export const HUE_USERNAME = z.string().parse(process.env.EXPO_PUBLIC_USERNAME);
 export const HUE_URL = z.string().url().parse(`http://${HUE_IP}/api/${HUE_USERNAME}/lights`);
 
-export const GET_LIGHTS_ERROR = new Error('Failed to fetch lights');
-export const UPDATE_LIGHT_ERROR = new Error('Failed to update light');
-
 export const lightSchema = z.object({
   name: z.string(),
   type: z.enum(['Extended color light', 'On/Off plug-in unit']),
   state: z.object({
     on: z.boolean(),
-    bri: z.number().min(0).max(254).default(0),
-    sat: z.number().min(0).max(254).default(0),
-    hue: z.number().min(0).max(65535).default(0),
+    bri: z.number().min(0).max(254).optional(),
+    sat: z.number().min(0).max(254).optional(),
+    hue: z.number().min(0).max(65535).optional(),
   }),
 });
 
@@ -49,26 +42,37 @@ export const lightUpdateSchema = z
     return { ...(successes as Partial<LightState>), errors: errors as Partial<Record<keyof LightState, string>> };
   });
 
-export async function getLights(): APIResponse<Lights> {
+export async function getLights(): Promise<Lights> {
   const response = await fetch(HUE_URL);
-  if (!response.ok) return { success: false, error: GET_LIGHTS_ERROR };
+  if (!response.ok) return Promise.reject(new Error(response.statusText));
 
   const json = await lightsSchema.safeParseAsync(await response.json());
-  return json.success ? { data: json.data, success: true } : { success: false, error: GET_LIGHTS_ERROR };
+  return json.success ? json.data : Promise.reject(new Error(json.error.message));
 }
 
-export async function updateLight(id: string, state: LightState): APIResponse<LightState & { id: string }> {
-  const request = z.object({ id: z.string(), state: lightSchema.shape.state }).safeParse({ id, state });
-  if (!request.success) return { success: false, error: UPDATE_LIGHT_ERROR };
+export async function updateLight(light: Lights[0]): Promise<Lights[0]> {
+  const request = lightSchema.extend({ id: z.string() }).safeParse(light);
+  if (!request.success) return Promise.reject(new Error(request.error.message));
 
   const body = JSON.stringify(request.data.state);
   const response = await fetch(`${HUE_URL}/${request.data.id}/state`, { method: 'PUT', body });
-  if (!response.ok) return { success: false, error: UPDATE_LIGHT_ERROR };
+  if (!response.ok) return Promise.reject(new Error(response.statusText));
 
   const json = await lightUpdateSchema.safeParseAsync(await response.json());
-  if (!json.success) return { success: false, error: UPDATE_LIGHT_ERROR };
+  if (!json.success) return Promise.reject(new Error(json.error.message));
 
-  return json.data.errors
-    ? { success: false, error: UPDATE_LIGHT_ERROR }
-    : { data: { id: request.data.id, ...request.data.state, ...json.data }, success: true };
+  return Object.keys(json.data.errors).length
+    ? Promise.reject(new Error(Object.values(json.data.errors).join(', ')))
+    : { ...request.data, state: { ...request.data.state, ...json.data } };
+}
+
+export async function updateAllLights(lights: Lights): Promise<Lights> {
+  const on = !lights.some((light) => light.state.on);
+  const body = lights.map(async (light) =>
+    light.state.on !== on ? await updateLight({ ...light, state: { ...light.state, on } }) : light,
+  );
+  const response = await Promise.allSettled(body);
+  const successes = response.filter((entry) => entry.status === 'fulfilled').map((entry) => entry.value);
+  const errors = response.filter((entry) => entry.status === 'rejected').map((entry) => entry.reason);
+  return errors.length ? Promise.reject(new Error(errors.join(', '))) : successes;
 }
